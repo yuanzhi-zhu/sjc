@@ -455,10 +455,10 @@ class GuidedDDPM(ScoreAdapter):
         self.M = 1000
         if noise_schedule == "linear":
             self.us = self.linear_us(self.M)
-            self._σ_min = 0.01
+            self._sigma_min = 0.01
         else:
             self.us = self.cosine_us(self.M)
-            self._σ_min = 0.0064
+            self._sigma_min = 0.0064
         self.noise_schedule = noise_schedule
 
         self._device = next(self.unet.parameters()).device
@@ -467,23 +467,23 @@ class GuidedDDPM(ScoreAdapter):
         return self._data_shape
 
     @property
-    def σ_max(self):
+    def sigma_max(self):
         return self.us[0]
 
     @property
-    def σ_min(self):
+    def sigma_min(self):
         return self.us[-1]
 
     @torch.no_grad()
-    def denoise(self, xs, σ, **model_kwargs):
+    def denoise(self, xs, sigma, **model_kwargs):
         N = xs.shape[0]
-        cond_t, σ = self.time_cond_vec(N, σ)
+        cond_t, sigma = self.time_cond_vec(N, sigma)
         output = self.unet(
-            xs / _sqrt(1 + σ**2), cond_t, **model_kwargs
+            xs / _sqrt(1 + sigma**2), cond_t, **model_kwargs
         )
         # not using the var pred
         n_hat = torch.split(output, xs.shape[1], dim=1)[0]
-        Ds = xs - σ * n_hat
+        Ds = xs - sigma * n_hat
         return Ds
 
     def cond_info(self, batch_size):
@@ -496,9 +496,9 @@ class GuidedDDPM(ScoreAdapter):
         return (self.classifier is not None)
 
     @torch.no_grad()
-    def classifier_grad(self, xs, σ, ys):
+    def classifier_grad(self, xs, sigma, ys):
         N = xs.shape[0]
-        cond_t, σ = self.time_cond_vec(N, σ)
+        cond_t, sigma = self.time_cond_vec(N, sigma)
         with torch.enable_grad():
             x_in = xs.detach().requires_grad_(True)
             logits = self.classifier(x_in, cond_t)
@@ -506,43 +506,43 @@ class GuidedDDPM(ScoreAdapter):
             selected = log_probs[range(len(logits)), ys.view(-1)]
             grad = torch.autograd.grad(selected.sum(), x_in)[0]
 
-        grad = grad * (1 / sqrt(1 + σ**2))
+        grad = grad * (1 / sqrt(1 + sigma**2))
         return grad
 
     def snap_t_to_nearest_tick(self, t):
         j = np.abs(t - self.us).argmin()
         return self.us[j], j
 
-    def time_cond_vec(self, N, σ):
-        if isinstance(σ, float):
-            σ, j = self.snap_t_to_nearest_tick(σ)  # σ might change due to snapping
+    def time_cond_vec(self, N, sigma):
+        if isinstance(sigma, float):
+            sigma, j = self.snap_t_to_nearest_tick(sigma)  # sigma might change due to snapping
             cond_t = (self.M - 1) - j
             cond_t = torch.tensor([cond_t] * N, device=self.device)
-            return cond_t, σ
+            return cond_t, sigma
         else:
-            assert isinstance(σ, torch.Tensor)
-            σ = σ.reshape(-1).cpu().numpy()
-            σs = []
+            assert isinstance(sigma, torch.Tensor)
+            sigma = sigma.reshape(-1).cpu().numpy()
+            sigmas = []
             js = []
-            for elem in σ:
-                _σ, _j = self.snap_t_to_nearest_tick(elem)
-                σs.append(_σ)
+            for elem in sigma:
+                _sigma, _j = self.snap_t_to_nearest_tick(elem)
+                sigmas.append(_sigma)
                 js.append((self.M - 1) - _j)
 
             cond_t = torch.tensor(js, device=self.device)
-            σs = torch.tensor(σs, device=self.device, dtype=torch.float32).reshape(-1, 1, 1, 1)
-            return cond_t, σs
+            sigmas = torch.tensor(sigmas, device=self.device, dtype=torch.float32).reshape(-1, 1, 1, 1)
+            return cond_t, sigmas
 
     @staticmethod
     def cosine_us(M=1000):
         assert M == 1000
 
-        def α_bar(j):
+        def alpha_bar(j):
             return sin(pi / 2 * j / (M * (0.008 + 1))) ** 2
 
         us = [0, ]
         for j in reversed(range(0, M)):  # [M-1, 0], inclusive
-            u_j = sqrt(((us[-1] ** 2) + 1) / (max(α_bar(j) / α_bar(j+1), 0.001)) - 1)
+            u_j = sqrt(((us[-1] ** 2) + 1) / (max(alpha_bar(j) / alpha_bar(j+1), 0.001)) - 1)
             us.append(u_j)
 
         us = np.array(us)
@@ -553,10 +553,11 @@ class GuidedDDPM(ScoreAdapter):
     @staticmethod
     def linear_us(M=1000):
         assert M == 1000
-        β_start = 0.0001
-        β_end = 0.02
-        βs = np.linspace(β_start, β_end, M, dtype=np.float64)
-        αs = np.cumprod(1 - βs)
-        us = np.sqrt((1 - αs) / αs)
+        beta_start = 0.0001
+        beta_end = 0.02
+        betas = np.linspace(beta_start, beta_end, M, dtype=np.float64)
+        alphas = np.cumprod(1 - betas)
+        us = np.sqrt((1 - alphas) / alphas)
         us = us[::-1]
         return us
+

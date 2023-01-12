@@ -102,7 +102,7 @@ def sjc_3d(
     H, W = poser.H, poser.W
     Ks, poses, prompt_prefixes = poser.sample_train(n_steps)
 
-    ts = model.us[30:-10]
+    ts = list(range(1000))[30:-10]
     fuse = EarlyLoopBreak(5)
 
     same_noise = torch.randn(1, 4, H, W, device=model.device).repeat(bs, 1, 1, 1)
@@ -117,34 +117,37 @@ def sjc_3d(
             p = f"{prompt_prefixes[i]} {model.prompt}"
             score_conds = model.prompts_emb([p])
 
-            y, depth, ws = render_one_view(vox, aabb, H, W, Ks[i], poses[i], return_w=True)
+            x0, depth, ws = render_one_view(vox, aabb, H, W, Ks[i], poses[i], return_w=True)
 
             if isinstance(model, StableDiffusion):
                 pass
             else:
-                y = torch.nn.functional.interpolate(y, (target_H, target_W), mode='bilinear')
+                x0 = torch.nn.functional.interpolate(x0, (target_H, target_W), mode='bilinear')
 
             opt.zero_grad()
 
             with torch.no_grad():
-                chosen_σs = np.random.choice(ts, bs, replace=False)
-                chosen_σs = chosen_σs.reshape(-1, 1, 1, 1)
-                chosen_σs = torch.as_tensor(chosen_σs, device=model.device, dtype=torch.float32)
-                # chosen_σs = us[i]
+                chosen_ts = np.random.choice(ts, 1, replace=False)
+                #interval_ratio = 0.5
+                #chosen_ts = np.random.choice(ts[max(0,int((n_steps-i-interval_ratio*n_steps)/n_steps*len(ts))):min(len(ts),int((n_steps-i+interval_ratio*n_steps)/n_steps*len(ts)))], 1, replace=False)
+                chosen_alphas = model.alphas_cumprod[chosen_ts]
+                chosen_alphas = torch.tensor([chosen_alphas] * bs, device=model.device, dtype=torch.float32)
+                chosen_alphas = chosen_alphas.reshape(-1, 1, 1, 1)
 
-                noise = torch.randn(bs, *y.shape[1:], device=model.device)
+                noise = torch.randn(bs, *x0.shape[1:], device=model.device)
 
-                zs = y + chosen_σs * noise
-                Ds = model.denoise(zs, chosen_σs, **score_conds)
-
+                zs = torch.sqrt(chosen_alphas) * x0 + torch.sqrt(1-chosen_alphas) * noise
+                score = model.score(zs, chosen_ts[0], **score_conds)
+                
                 if var_red:
-                    grad = (Ds - y) / chosen_σs
+                    score = score - noise
                 else:
-                    grad = (Ds - zs) / chosen_σs
+                    #score = score
+                    pass
 
-                grad = grad.mean(0, keepdim=True)
+                score = score.mean(0, keepdim=True)
 
-            y.backward(-grad, retain_graph=True)
+            x0.backward(-score, retain_graph=True)
 
             if depth_weight > 0:
                 center_depth = depth[7:-7, 7:-7]
@@ -163,13 +166,13 @@ def sjc_3d(
 
             opt.step()
 
-            metric.put_scalars(**tsr_stats(y))
+            metric.put_scalars(**tsr_stats(x0))
 
             if every(pbar, percent=1):
                 with torch.no_grad():
                     if isinstance(model, StableDiffusion):
-                        y = model.decode(y)
-                    vis_routine(metric, y, depth)
+                        x0 = model.decode(x0)
+                    vis_routine(metric, x0, depth)
 
             # if every(pbar, step=2500):
             #     metric.put_artifact(
@@ -296,3 +299,4 @@ if __name__ == "__main__":
     seed_everything(0)
     dispatch(SJC)
     # evaluate_ckpt()
+

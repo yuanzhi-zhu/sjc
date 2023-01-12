@@ -35,9 +35,11 @@ def load_model_from_config(config, ckpt, verbose=False):
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
         print(f"Global Step: {pl_sd['global_step']}")
-    sd = pl_sd["state_dict"]
+    if "state_dict" in pl_sd:
+        pl_sd = pl_sd["state_dict"]
+    #sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
+    m, u = model.load_state_dict(pl_sd, strict=False)
     if len(m) > 0 and verbose:
         print("missing keys:")
         print(m)
@@ -109,28 +111,36 @@ class StableDiffusion(ScoreAdapter):
         noise_schedule = "linear"
         self.noise_schedule = noise_schedule
         self.us = self.linear_us(self.M)
+        beta_start = 0.00085
+        beta_end = 0.0120
+        self.betas = np.linspace(beta_start**0.5, beta_end**0.5, self.M, dtype=np.float64)**2
+        #betas = torch.from_numpy(betas).to(device)
+        alphas = 1. - self.betas
+        self.alphas_cumprod = np.cumprod(alphas, axis=0)
 
     def data_shape(self):
         return self._data_shape
 
     @property
-    def σ_max(self):
+    def sigma_max(self):
         return self.us[0]
 
     @property
-    def σ_min(self):
+    def sigma_min(self):
         return self.us[-1]
 
     @torch.no_grad()
-    def denoise(self, xs, σ, **model_kwargs):
+    def denoise(self, xs, t, **model_kwargs):
+        pass
+        
+    @torch.no_grad()
+    def score(self, xs, t, **model_kwargs):
         with self.precision_scope("cuda"):
             with self.model.ema_scope():
                 N = xs.shape[0]
                 c = model_kwargs.pop('c')
                 uc = model_kwargs.pop('uc')
-                cond_t, σ = self.time_cond_vec(N, σ)
-                unscaled_xs = xs
-                xs = xs / _sqrt(1 + σ**2)
+                cond_t = torch.tensor([t] * N, device=self.device)
                 if uc is None or self.scale == 1.:
                     output = self.model.apply_model(xs, cond_t, c)
                 else:
@@ -145,8 +155,7 @@ class StableDiffusion(ScoreAdapter):
                 else:
                     output = output
 
-                Ds = unscaled_xs - σ * output
-                return Ds
+                return -output
 
     def cond_info(self, batch_size):
         prompts = batch_size * [self.prompt]
@@ -177,34 +186,35 @@ class StableDiffusion(ScoreAdapter):
         j = np.abs(t - self.us).argmin()
         return self.us[j], j
 
-    def time_cond_vec(self, N, σ):
-        if isinstance(σ, float):
-            σ, j = self.snap_t_to_nearest_tick(σ)  # σ might change due to snapping
+    def time_cond_vec(self, N, sigma):
+        if isinstance(sigma, float):
+            sigma, j = self.snap_t_to_nearest_tick(sigma)  # sigma might change due to snapping
             cond_t = (self.M - 1) - j
             cond_t = torch.tensor([cond_t] * N, device=self.device)
-            return cond_t, σ
+            return cond_t, sigma
         else:
-            assert isinstance(σ, torch.Tensor)
-            σ = σ.reshape(-1).cpu().numpy()
-            σs = []
+            assert isinstance(sigma, torch.Tensor)
+            sigma = sigma.reshape(-1).cpu().numpy()
+            sigmas = []
             js = []
-            for elem in σ:
-                _σ, _j = self.snap_t_to_nearest_tick(elem)
-                σs.append(_σ)
+            for elem in sigma:
+                _sigma, _j = self.snap_t_to_nearest_tick(elem)
+                sigmas.append(_sigma)
                 js.append((self.M - 1) - _j)
 
             cond_t = torch.tensor(js, device=self.device)
-            σs = torch.tensor(σs, device=self.device, dtype=torch.float32).reshape(-1, 1, 1, 1)
-            return cond_t, σs
+            sigmas = torch.tensor(sigmas, device=self.device, dtype=torch.float32).reshape(-1, 1, 1, 1)
+            return cond_t, sigmas
 
     @staticmethod
     def linear_us(M=1000):
         assert M == 1000
-        β_start = 0.00085
-        β_end = 0.0120
-        βs = np.linspace(β_start**0.5, β_end**0.5, M, dtype=np.float64)**2
-        αs = np.cumprod(1 - βs)
-        us = np.sqrt((1 - αs) / αs)
+        beta_start = 0.00085
+        beta_end = 0.0120
+        ## more time steps on low beta region
+        betas = np.linspace(beta_start**0.5, beta_end**0.5, M, dtype=np.float64)**2
+        alphas = np.cumprod(1 - betas)
+        us = np.sqrt((1 - alphas) / alphas)
         us = us[::-1]
         return us
 
@@ -233,3 +243,4 @@ def test():
 
 if __name__ == "__main__":
     test()
+

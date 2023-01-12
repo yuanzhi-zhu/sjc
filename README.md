@@ -1,3 +1,9 @@
+# Update:
+
+Nocicing that most of the pre-trained diffusion models are VP-SDE diffusion models like DDPM, and the relationship between score and noise prediction 
+$$\boldsymbol{s}_\theta(\boldsymbol{x}_t,t)&\approx&\nabla_{\boldsymbol{x}_t} \log p(\boldsymbol{x}_t|\boldsymbol{x}_0) = -\frac{\boldsymbol{x}_t - \bar{\alpha}_t\boldsymbol{x}_0}{{1-\bar{\alpha}_t}} = -\frac{\boldsymbol{\varepsilon}}{\sqrt{1-\bar{\alpha}_t}} \approx -\frac{\boldsymbol{\varepsilon}_\theta(\boldsymbol{x}_t,t)}{\sqrt{1-\bar{\alpha}_t}}$$, 
+there is no need to inteprete the score from a denoiser point of view.
+
 # Score Jacobian Chaining: Lifting Pretrained 2D Diffusion Models for 3D Generation
 
 [Haochen Wang*](https://whc.is/),
