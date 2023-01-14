@@ -5,7 +5,7 @@ import torch
 from misc import torch_samps_to_imgs
 from adapt import Karras, ScoreAdapter, power_schedule
 from adapt_gddpm import GuidedDDPM
-from adapt_ncsn import NCSN as _NCSN
+# from adapt_ncsn import NCSN as _NCSN
 # from adapt_vesde import VESDE  # not included to prevent import conflicts
 from adapt_sd import StableDiffusion
 
